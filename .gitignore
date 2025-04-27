@@ -1,0 +1,4 @@
+.venv
+*.html
+*.pdf
+*.csv
