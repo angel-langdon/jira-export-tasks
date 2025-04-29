@@ -16,7 +16,7 @@ CURRENCY=$ # YOUR CURRENCY SYMBOL
 Export CSV tasks from Jira and run the following program
 
 ```
-uv run main.py tasks.csv
+uv run main.py
 ```
 
 ## Result
