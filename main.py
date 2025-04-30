@@ -9,6 +9,9 @@ import requests
 from dotenv import load_dotenv
 from requests.auth import HTTPBasicAuth
 
+reports_dir = Path(__file__).parent / "reports"
+reports_dir.mkdir(exist_ok=True)
+
 
 def duration(seconds: int) -> str:
     """Convert seconds to a human-readable format."""
@@ -39,7 +42,7 @@ rename_map = {
     "summary": "Summary",
     "timespent": "Time Spent",
     "updated": "Updated",
-    "taskcost": f"Task Cost (hours x{HOURLY_RATE}{CURRENCY}/hour",
+    "taskcost": f"Task Cost ({HOURLY_RATE}{CURRENCY}/hour",
 }
 dt_cols = ["updated"]
 params = {"jql": jql_query, "fields": fields, "maxResults": 100}
@@ -111,8 +114,8 @@ if __name__ == "__main__":
 
     <h3>Total cost {total_cost:.2f}{CURRENCY}</h3>
     """
-
-    pdf_path = Path("report.pdf")
+    current_date = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+    pdf_path = reports_dir / f"report-{current_date}.pdf"
     pdfkit.from_string(
         html,
         pdf_path,
