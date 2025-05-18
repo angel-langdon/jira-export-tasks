@@ -1,4 +1,5 @@
 import os
+import sys
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
@@ -11,6 +12,7 @@ from requests.auth import HTTPBasicAuth
 
 reports_dir = Path(__file__).parent / "reports"
 reports_dir.mkdir(exist_ok=True)
+start_date = sys.argv[1] if len(sys.argv) > 1 else None
 
 
 def duration(seconds: int) -> str:
@@ -55,12 +57,17 @@ def get_jira_issues():
 
     issues = response.json()["issues"]
     data = []
+    if start_date:
+        print(f"Filtering issues updated after {start_date}")
     for issue in issues:
         dic = issue["fields"]
+        if start_date and dic["updated"] < start_date:
+            continue
         dic["project"] = dic["project"]["name"]
         data.append(dic)
 
     df = pd.DataFrame(data)
+    df = df[df["timespent"] > 0]
     for c in dt_cols:
         df[c] = pd.to_datetime(df[c]).dt.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -68,16 +75,17 @@ def get_jira_issues():
         (Decimal(v) / Decimal(3600)) * HOURLY_RATE for v in df["timespent"]
     ]
     df["taskcost"] = df["taskcost"].fillna(Decimal(0))
+    total_hours = df["timespent"].sum() / 3600
     df["timespent"] = [duration(s) for s in df["timespent"]]
     df = df[rename_map.keys()]
-    return df
+    return df, total_hours
 
-
-get_jira_issues()
-# %%
 
 if __name__ == "__main__":
-    df = get_jira_issues()
+    df, total_hours = get_jira_issues()
+    total_hours, minutes = divmod(total_hours * 60, 60)
+    total_hours = int(total_hours)
+    minutes = int(minutes)
     total_cost = df["taskcost"].sum()
     df["taskcost"] = df["taskcost"].apply(lambda x: f"{x:.2f} {CURRENCY}")
     df = df.rename(columns=rename_map)
@@ -112,6 +120,8 @@ if __name__ == "__main__":
 
     {df.to_html(index=False)}
 
+    <h4>Hourly rate: {HOURLY_RATE} {CURRENCY}</h4>
+    <h4>Total time: {total_hours} hours {minutes} min</h4>
     <h3>Total cost {total_cost:.2f}{CURRENCY}</h3>
     """
     current_date = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
