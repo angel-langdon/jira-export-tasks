@@ -19,6 +19,14 @@ Export CSV tasks from Jira and run the following program
 uv run main.py
 ```
 
+Terminal alias command:
+
+```
+alias treport='cd ~/projects/jira-export-tasks/ && uv run main.py'
+```
+
+And just run `treport [date_optional_iso_format like this 2025-05-18T21:42:00]`
+
 ## Result
 
 **report.pdf**
