@@ -3,16 +3,42 @@ import sys
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
+import webbrowser
 
 import pandas as pd
-import pdfkit
+from playwright.sync_api import sync_playwright
 import requests
 from dotenv import load_dotenv
 from requests.auth import HTTPBasicAuth
 
+
+
 reports_dir = Path(__file__).parent / "reports"
 reports_dir.mkdir(exist_ok=True)
 start_date = sys.argv[1] if len(sys.argv) > 1 else None
+
+html_styles = """<style>
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            font-family: Arial, sans-serif;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        th {
+            background-color: #f2f2f2;
+            font-weight: bold;
+        }
+        tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+        tr:hover {
+            background-color: #e6f7ff;
+        }
+    </style>"""
 
 
 def duration(seconds: int) -> str:
@@ -80,6 +106,20 @@ def get_jira_issues():
     df = df[rename_map.keys()]
     return df, total_hours
 
+def html_to_pdf(html: str, path: Path):
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.set_content(html, wait_until="networkidle")
+        page.pdf(
+            path=path,
+            format="A4",
+            print_background=True,
+            margin={"top": "0.5in", "bottom": "0.5in", "left": "0.5in", "right": "0.5in"},
+
+        )
+        browser.close()
+
 
 if __name__ == "__main__":
     df, total_hours = get_jira_issues()
@@ -89,28 +129,7 @@ if __name__ == "__main__":
     total_cost = df["taskcost"].sum()
     df["taskcost"] = df["taskcost"].apply(lambda x: f"{x:.2f} {CURRENCY}")
     df = df.rename(columns=rename_map)
-    html_styles = """<style>
-        table {
-            border-collapse: collapse;
-            width: 100%;
-            font-family: Arial, sans-serif;
-        }
-        th, td {
-            border: 1px solid #ddd;
-            padding: 8px;
-            text-align: left;
-        }
-        th {
-            background-color: #f2f2f2;
-            font-weight: bold;
-        }
-        tr:nth-child(even) {
-            background-color: #f9f9f9;
-        }
-        tr:hover {
-            background-color: #e6f7ff;
-        }
-    </style>"""
+
 
     html = f"""
     {html_styles}
@@ -126,17 +145,6 @@ if __name__ == "__main__":
     """
     current_date = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
     pdf_path = reports_dir / f"report-{current_date}.pdf"
-    pdfkit.from_string(
-        html,
-        pdf_path,
-        options={
-            "encoding": "UTF-8",
-            "page-size": "A4",
-            "margin-top": "0.5in",
-            "margin-right": "0.5in",
-            "margin-bottom": "0.5in",
-            "margin-left": "0.5in",
-        },
-    )
+    html_to_pdf(html, pdf_path)
     print(f"PDF report generated at {pdf_path.absolute()}")
-    os.startfile(pdf_path)
+    webbrowser.open(pdf_path.as_posix())
