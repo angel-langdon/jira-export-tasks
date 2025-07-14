@@ -3,3 +3,5 @@
 *.pdf
 *.csv
 .env
+*.xlsx
+.~lock*

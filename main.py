@@ -1,4 +1,3 @@
-import json
 import os
 import subprocess
 import sys
@@ -10,6 +9,7 @@ from typing import Any
 
 import pandas as pd
 import requests
+import tqdm
 from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright
 from requests.auth import HTTPBasicAuth
@@ -20,6 +20,14 @@ subprocess.run(["playwright", "install", "chromium"], check=True)
 reports_dir = Path(__file__).parent / "reports"
 reports_dir.mkdir(exist_ok=True)
 start_date = sys.argv[1] if len(sys.argv) > 1 else None
+
+
+def start_file(file: Path):
+    if sys.platform != "win32":
+        subprocess.call(["xdg-open", file])
+    else:
+        os.startfile(file)
+
 
 html_styles = """<style>
         table {
@@ -74,7 +82,7 @@ rename_map = {
     "summary": "Summary",
     "timespent": "Time Spent",
     "updated": "Updated",
-    "taskcost": f"Task Cost ({HOURLY_RATE}{CURRENCY}/hour",
+    "taskcost": f"Task Cost ({HOURLY_RATE}{CURRENCY}/hour)",
 }
 dt_cols = ["updated"]
 params = {"jql": jql_query, "fields": fields, "maxResults": 100}
@@ -144,22 +152,6 @@ def get_jira_issues():
     return df, total_hours
 
 
-def get_worklogs(issue_ids: list[int]):
-    """Fetch worklogs for a list of issue IDs."""
-    worklog_url = f"{JIRA_URL}/rest/api/3/worklog/list"
-    print(issue_ids)
-    body_data = {"ids": issue_ids}
-    payload = json.dumps(body_data)
-    response = requests.post(
-        worklog_url,
-        headers=headers,
-        data=payload,
-        auth=auth,
-    )
-    response.raise_for_status()
-    return response.json()
-
-
 def html_to_pdf(html: str, path: Path):
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -183,14 +175,62 @@ def format_cost(cost: Decimal) -> str:
     return f"{cost:.2f} {CURRENCY}"
 
 
+def to_excel(fpath: str, df: pd.DataFrame):
+    """Saves DataFrame as native Excel table autofitting columns"""
+    writer = pd.ExcelWriter(fpath, engine="xlsxwriter")
+    df.to_excel(writer, sheet_name="Sheet1", startrow=1, header=False, index=False)
+
+    worksheet = writer.sheets["Sheet1"]
+    (rows, cols) = df.shape
+    column_settings = [{"header": column} for column in df.columns]
+
+    worksheet.add_table(0, 0, rows, cols - 1, {"columns": column_settings})
+    worksheet.set_column(0, cols - 1, 1)
+    worksheet.autofit()
+
+    writer.close()
+
+
+def create_worklog_excel(worklogs: list[dict[str, Any]], path: Path):
+    """Creates an excel file from worklogs with day and hours spent."""
+    daily_seconds: dict[str, int] = {}
+    for worklog in worklogs:
+        started_str = str(worklog["started"])
+        date_str = started_str.split("T")[0]
+        seconds = int(worklog["timeSpentSeconds"])
+        daily_seconds[date_str] = daily_seconds.get(date_str, 0) + seconds
+
+    sorted_days = sorted(daily_seconds.items())
+
+    dates = [item[0] for item in sorted_days]
+    hours = [Decimal(item[1] / 3600) for item in sorted_days]
+    dates.append("Total")
+    total_seconds = Decimal(0)
+    for d in daily_seconds.values():
+        total_seconds += Decimal(d)
+    hours.append(Decimal(total_seconds / 3600))
+    hours = [f"{h:.2f}" for h in hours]
+
+    df = pd.DataFrame([hours], columns=dates)
+    to_excel(path, df)
+
+
 if __name__ == "__main__":
-    df, total_hours = get_jira_issues()
+    df, total_decimal_hours = get_jira_issues()
+    current_date = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+    worklogs = []
     if not df.empty:
         issue_ids = df.index.tolist()
-        worklogs = get_worklogs(issue_ids)
-        print("Worklogs:")
-        print(worklogs)
-    total_hours, minutes = divmod(total_hours * 60, 60)
+        for issue_id in tqdm.tqdm(issue_ids, desc="Fetching worklogs"):
+            worklogs.extend(get_worklog(issue_id))
+
+    if len(worklogs) > 0:
+        worklog_path = reports_dir / f"worklogs-{current_date}.xlsx"
+        create_worklog_excel(worklogs, worklog_path)
+        print(f"Worklog excel report generated at {worklog_path.absolute()}")
+        start_file(worklog_path)
+
+    total_hours, minutes = divmod(total_decimal_hours * 60, 60)
     total_hours = int(total_hours)
     minutes = int(minutes)
     total_cost = df["taskcost"].sum()
@@ -206,10 +246,9 @@ if __name__ == "__main__":
     {df.to_html(index=False)}
 
     <h4>Hourly rate: {HOURLY_RATE} {CURRENCY}</h4>
-    <h4>Total time: {total_hours} hours {minutes} min</h4>
+    <h4>Total time: {total_hours} hours {minutes} min ({total_decimal_hours:.2f})</h4>
     <h3>Total cost {total_cost:.2f}{CURRENCY}</h3>
     """
-    current_date = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
     pdf_path = reports_dir / f"report-{current_date}.pdf"
     html_to_pdf(html, pdf_path)
     print(f"PDF report generated at {pdf_path.absolute()}")
