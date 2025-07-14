@@ -2,7 +2,7 @@ import os
 import subprocess
 import sys
 import webbrowser
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -200,16 +200,33 @@ def create_worklog_excel(worklogs: list[dict[str, Any]], path: Path):
         seconds = int(worklog["timeSpentSeconds"])
         daily_seconds[date_str] = daily_seconds.get(date_str, 0) + seconds
 
+    if not daily_seconds:
+        return
+
     sorted_days = sorted(daily_seconds.items())
+    start_date = date.fromisoformat(sorted_days[0][0])
+    end_date = date.fromisoformat(sorted_days[-1][0])
+
+    all_dates = {}
+    current_date = start_date
+    while current_date <= end_date:
+        all_dates[current_date.isoformat()] = daily_seconds.get(
+            current_date.isoformat(), ""
+        )
+        current_date += timedelta(days=1)
+
+    sorted_days = sorted(all_dates.items())
 
     dates = [item[0] for item in sorted_days]
-    hours = [Decimal(item[1] / 3600) for item in sorted_days]
+    hours = [
+        f"{Decimal(item[1] / 3600):.2f}".replace(".", ",") if item[1] != "" else ""
+        for item in sorted_days
+    ]
     dates.append("Total")
     total_seconds = Decimal(0)
     for d in daily_seconds.values():
         total_seconds += Decimal(d)
-    hours.append(Decimal(total_seconds / 3600))
-    hours = [f"{h:.2f}" for h in hours]
+    hours.append(f"{Decimal(total_seconds / 3600):.2f}".replace(".", ","))
 
     df = pd.DataFrame([hours], columns=dates)
     to_excel(path, df)
