@@ -1,19 +1,20 @@
+import json
 import os
+import subprocess
 import sys
+import webbrowser
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
-import webbrowser
+from typing import Any
 
 import pandas as pd
-from playwright.sync_api import sync_playwright
 import requests
 from dotenv import load_dotenv
+from playwright.sync_api import sync_playwright
 from requests.auth import HTTPBasicAuth
-import subprocess
 
 subprocess.run(["playwright", "install", "chromium"], check=True)
-
 
 
 reports_dir = Path(__file__).parent / "reports"
@@ -79,13 +80,42 @@ dt_cols = ["updated"]
 params = {"jql": jql_query, "fields": fields, "maxResults": 100}
 
 
+def extract_text_content(node: dict) -> str:
+    if "text" in node and node["type"] == "text":
+        return node["text"]
+    if "content" in node:
+        return "\n".join(extract_text_content(child) for child in node["content"])
+    return ""
+
+
+def get_worklog(issue_id: int):
+    """Fetch worklog for a specific issue ID."""
+    url = f"{JIRA_URL}/rest/api/3/issue/{issue_id}/worklog"
+    response = requests.get(url, headers=headers, auth=auth)
+    response.raise_for_status()
+    dic = response.json()
+    worklogs = dic["worklogs"]
+    res = [
+        {
+            "id": w["id"],
+            "issueId": w["issueId"],
+            "author": w["author"]["emailAddress"],
+            "started": w["started"],
+            "timeSpentSeconds": w["timeSpentSeconds"],
+            "comment": extract_text_content(w.get("comment", {})),
+        }
+        for w in worklogs
+    ]
+    return res
+
+
 def get_jira_issues():
     """Fetch issues from JIRA."""
     response = requests.get(search_url, headers=headers, params=params, auth=auth)
     response.raise_for_status()
 
     issues = response.json()["issues"]
-    data = []
+    data: list[dict[str, Any]] = []
     if start_date:
         print(f"Filtering issues updated after {start_date}")
     for issue in issues:
@@ -93,9 +123,13 @@ def get_jira_issues():
         if start_date and dic["updated"] < start_date:
             continue
         dic["project"] = dic["project"]["name"]
+        dic["id"] = issue["id"]
         data.append(dic)
 
     df = pd.DataFrame(data)
+    df["id"] = df["id"].astype(int)
+    if not df.empty:
+        df = df.set_index("id")
     df = df[df["timespent"] > 0]
     for c in dt_cols:
         df[c] = pd.to_datetime(df[c]).dt.strftime("%Y-%m-%d %H:%M:%S")
@@ -109,6 +143,23 @@ def get_jira_issues():
     df = df[rename_map.keys()]
     return df, total_hours
 
+
+def get_worklogs(issue_ids: list[int]):
+    """Fetch worklogs for a list of issue IDs."""
+    worklog_url = f"{JIRA_URL}/rest/api/3/worklog/list"
+    print(issue_ids)
+    body_data = {"ids": issue_ids}
+    payload = json.dumps(body_data)
+    response = requests.post(
+        worklog_url,
+        headers=headers,
+        data=payload,
+        auth=auth,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
 def html_to_pdf(html: str, path: Path):
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -118,21 +169,33 @@ def html_to_pdf(html: str, path: Path):
             path=path,
             format="A4",
             print_background=True,
-            margin={"top": "0.5in", "bottom": "0.5in", "left": "0.5in", "right": "0.5in"},
-
+            margin={
+                "top": "0.5in",
+                "bottom": "0.5in",
+                "left": "0.5in",
+                "right": "0.5in",
+            },
         )
         browser.close()
 
 
+def format_cost(cost: Decimal) -> str:
+    return f"{cost:.2f} {CURRENCY}"
+
+
 if __name__ == "__main__":
     df, total_hours = get_jira_issues()
+    if not df.empty:
+        issue_ids = df.index.tolist()
+        worklogs = get_worklogs(issue_ids)
+        print("Worklogs:")
+        print(worklogs)
     total_hours, minutes = divmod(total_hours * 60, 60)
     total_hours = int(total_hours)
     minutes = int(minutes)
     total_cost = df["taskcost"].sum()
-    df["taskcost"] = df["taskcost"].apply(lambda x: f"{x:.2f} {CURRENCY}")
+    df["taskcost"] = df["taskcost"].apply(format_cost)
     df = df.rename(columns=rename_map)
-
 
     html = f"""
     {html_styles}
