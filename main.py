@@ -16,10 +16,8 @@ from requests.auth import HTTPBasicAuth
 
 subprocess.run(["playwright", "install", "chromium"], check=True)
 
-
 reports_dir = Path(__file__).parent / "reports"
 reports_dir.mkdir(exist_ok=True)
-start_date = sys.argv[1] if len(sys.argv) > 1 else None
 
 
 def start_file(file: Path):
@@ -75,7 +73,7 @@ headers = {"Accept": "application/json", "Content-Type": "application/json"}
 
 search_url = f"{JIRA_URL}/rest/api/3/search"
 auth = HTTPBasicAuth(EMAIL, API_TOKEN)
-jql_query = f'project = "{PROJECT_KEY}" ORDER BY updated ASC'
+jql_query = f'project = "{PROJECT_KEY}" and sprint in openSprints ()'
 fields = "project,summary,updated,timespent"
 rename_map = {
     "project": "Project name",
@@ -85,7 +83,7 @@ rename_map = {
     "taskcost": f"Task Cost ({HOURLY_RATE}{CURRENCY}/hour)",
 }
 dt_cols = ["updated"]
-params = {"jql": jql_query, "fields": fields, "maxResults": 100}
+initial_params = {"jql": jql_query, "fields": fields, "maxResults": 100}
 
 
 def extract_text_content(node: dict) -> str:
@@ -117,19 +115,29 @@ def get_worklog(issue_id: int):
     return res
 
 
-def get_jira_issues():
+def get_jira_issues(only_finished_tasks: bool = False) -> pd.DataFrame:
     """Fetch issues from JIRA."""
-    response = requests.get(search_url, headers=headers, params=params, auth=auth)
-    response.raise_for_status()
+    issues = []
+    next_page_token = None
+    while True:
+        params = {**initial_params}
+        if next_page_token is not None:
+            params["nextPageToken"] = next_page_token
+        if only_finished_tasks:
+            print("Filtering issues with status Done")
+            params["jql"] += " and status = Done"
+        response = requests.get(search_url, headers=headers, params=params, auth=auth)
+        response.raise_for_status()
+        json = response.json()
+        page_issues = json["issues"]
+        next_page_token = json.get("nextPageToken")
+        issues.extend(page_issues)
+        if not next_page_token:
+            break
 
-    issues = response.json()["issues"]
     data: list[dict[str, Any]] = []
-    if start_date:
-        print(f"Filtering issues updated after {start_date}")
     for issue in issues:
         dic = issue["fields"]
-        if start_date and dic["updated"] < start_date:
-            continue
         dic["project"] = dic["project"]["name"]
         dic["id"] = issue["id"]
         data.append(dic)
@@ -233,7 +241,8 @@ def create_worklog_excel(worklogs: list[dict[str, Any]], path: Path):
 
 
 if __name__ == "__main__":
-    df, total_decimal_hours = get_jira_issues()
+    filter_is_done = sys.argv[1:] == ["done"]
+    df, total_decimal_hours = get_jira_issues(only_finished_tasks=filter_is_done)
     current_date = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
     worklogs = []
     if not df.empty:
