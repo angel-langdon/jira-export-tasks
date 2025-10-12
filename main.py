@@ -71,7 +71,7 @@ CURRENCY = os.environ["CURRENCY"]
 
 headers = {"Accept": "application/json", "Content-Type": "application/json"}
 
-search_url = f"{JIRA_URL}/rest/api/3/search"
+search_url = f"{JIRA_URL}/rest/api/3/search/jql"
 auth = HTTPBasicAuth(EMAIL, API_TOKEN)
 jql_query = f'project = "{PROJECT_KEY}" and sprint in openSprints ()'
 fields = "project,summary,updated,timespent"
@@ -130,9 +130,10 @@ def get_jira_issues(only_finished_tasks: bool = False) -> pd.DataFrame:
         response.raise_for_status()
         json = response.json()
         page_issues = json["issues"]
+        is_last = json.get("isLast", True)
         next_page_token = json.get("nextPageToken")
         issues.extend(page_issues)
-        if not next_page_token:
+        if is_last:
             break
 
     data: list[dict[str, Any]] = []
