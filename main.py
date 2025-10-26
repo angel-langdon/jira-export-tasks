@@ -149,7 +149,12 @@ def get_jira_issues(only_finished_tasks: bool = False) -> pd.DataFrame:
         df = df.set_index("id")
     df = df[df["timespent"] > 0]
     for c in dt_cols:
-        df[c] = pd.to_datetime(df[c]).dt.strftime("%Y-%m-%d %H:%M:%S")
+        dt_series = pd.to_datetime(df[c], errors="coerce", utc=True)
+        localized = dt_series.dt.tz_localize(None)
+        df[c] = [
+            ts.strftime("%Y-%m-%d %H:%M:%S") if not pd.isna(ts) else ""
+            for ts in localized
+        ]
 
     df["taskcost"] = [
         (Decimal(v) / Decimal(3600)) * HOURLY_RATE for v in df["timespent"]
